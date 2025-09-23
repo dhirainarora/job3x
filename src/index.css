@@ -4,8 +4,5 @@
 
 /* Custom global styles */
 body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-  background-color: #f9fafb; /* light gray background */
+  @apply bg-slate-50 text-slate-900;
 }
