@@ -2,11 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional: custom styles */
 body {
   @apply bg-slate-50 text-slate-900;
-}
-
-button {
-  @apply transition duration-150 ease-in-out;
 }
