@@ -12,7 +12,7 @@ import {
   GitBranch,
 } from "lucide-react";
 
-// CareerAI frontend preview (UI only, not connected to backend yet)
+// CareerAI Full Frontend Preview Component
 export default function CareerAIPreview() {
   const [tab, setTab] = useState("overview");
   const [search, setSearch] = useState("");
@@ -85,7 +85,17 @@ export default function CareerAIPreview() {
           transition={{ delay: 0.15 }}
           className="bg-white border border-slate-100 rounded-2xl p-5 shadow-lg"
         >
-          <h3 className="font-semibold">Active Applications</h3>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs text-slate-400">Active Applications</p>
+              <h3 className="font-semibold">3 in progress</h3>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-slate-400">Next Mock</p>
+              <p className="font-semibold">Sep 25, 2025</p>
+            </div>
+          </div>
+
           <div className="mt-4 space-y-3">
             {mockJobs.map((j) => (
               <div key={j.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
@@ -93,9 +103,10 @@ export default function CareerAIPreview() {
                   <p className="font-medium">{j.title}</p>
                   <p className="text-xs text-slate-400">{j.company} • {j.date}</p>
                 </div>
-                <p className={`font-semibold ${j.ats > 85 ? "text-emerald-600" : j.ats > 75 ? "text-amber-600" : "text-rose-600"}`}>
-                  {j.ats}%
-                </p>
+                <div className="text-right">
+                  <p className="text-xs text-slate-400">ATS</p>
+                  <p className={`font-semibold ${j.ats > 85 ? 'text-emerald-600' : j.ats > 75 ? 'text-amber-600' : 'text-rose-600'}`}>{j.ats}%</p>
+                </div>
               </div>
             ))}
           </div>
@@ -105,7 +116,8 @@ export default function CareerAIPreview() {
       {/* FEATURES */}
       <section className="max-w-7xl mx-auto px-6 py-8">
         <h3 className="text-2xl font-bold">What CareerAI does differently</h3>
-        <p className="text-slate-500 mt-2 max-w-2xl">An end-to-end AI job accelerator built for grads and job-seekers.</p>
+        <p className="text-slate-500 mt-2 max-w-2xl">An end-to-end AI job accelerator built for college grads and anyone struggling to find a role.</p>
+
         <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {features.map((f, idx) => {
             const Icon = f.icon;
@@ -140,4 +152,3 @@ export default function CareerAIPreview() {
     </div>
   );
 }
-
