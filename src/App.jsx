@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { auth, provider } from "./firebase";
 import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
-import CareerAIPreview from "./CareerAIPreview"; // using your canvas frontend
+import CareerAIPreview from "./CareerAIPreview";
 
 export default function App() {
   const [user, setUser] = useState(null);
 
+  // Track login state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -13,6 +14,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Google Login
   const login = async () => {
     try {
       await signInWithPopup(auth, provider);
@@ -21,6 +23,7 @@ export default function App() {
     }
   };
 
+  // Logout
   const logout = async () => {
     try {
       await signOut(auth);
@@ -29,6 +32,7 @@ export default function App() {
     }
   };
 
+  // If not logged in → show login screen
   if (!user) {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-100">
@@ -42,9 +46,10 @@ export default function App() {
     );
   }
 
+  // If logged in → show dashboard with logout button
   return (
-    <div>
-      {/* Top bar with profile + logout */}
+    <div className="min-h-screen flex flex-col">
+      {/* Top bar */}
       <div className="flex justify-between items-center p-4 bg-white shadow">
         <div className="flex items-center gap-3">
           <img
@@ -62,8 +67,10 @@ export default function App() {
         </button>
       </div>
 
-      {/* Load your full dashboard */}
-      <CareerAIPreview />
+      {/* Main CareerAI dashboard */}
+      <div className="flex-1">
+        <CareerAIPreview />
+      </div>
     </div>
   );
 }
