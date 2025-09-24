@@ -15,16 +15,10 @@ import { auth, db, loginWithGoogle, logoutUser } from "./firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 /**
- * src/App.jsx
- * - Visual design preserved exactly like your preview
- * - All feature cards and buttons wired to AI + Firebase flows
- * - Calls serverless function at /.netlify/functions/ai with actions:
- *   find_jobs, optimize_resume, generate_cover_letter, generate_lesson,
- *   mock_interview, interview_feedback, side_hustles
- *
- * Important:
- * - Do NOT put API keys here. Netlify envs must provide GEMINI_API_KEY and VITE_FIREBASE_*.
- * - If AI returns raw text, component tries to parse JSON; otherwise uses fallback parsing.
+ * src/App.jsx — CareerAI main app (full). 
+ * Added feature: Create Resume (generate from profile form).
+ * - Uses '/.netlify/functions/ai' for AI features (including create_resume).
+ * - After generating, user can Download (.txt) or Open Printable (then print->Save PDF).
  */
 
 export default function CareerAIPreview() {
@@ -42,6 +36,14 @@ export default function CareerAIPreview() {
   const [optimizedResume, setOptimizedResume] = useState(null);
   const [atsScore, setAtsScore] = useState(null);
   const [coverLetter, setCoverLetter] = useState("");
+
+  // Create Resume (form) state
+  const [crName, setCrName] = useState("");
+  const [crTitle, setCrTitle] = useState("");
+  const [crSummary, setCrSummary] = useState("");
+  const [crEducation, setCrEducation] = useState("");
+  const [crExperience, setCrExperience] = useState("");
+  const [crSkills, setCrSkills] = useState("");
 
   // Lessons & Interview
   const [lesson, setLesson] = useState(null);
@@ -138,7 +140,6 @@ export default function CareerAIPreview() {
 
   // ---------- JOBS ----------
   async function fetchJobs() {
-    // Send resume (if available) and search query to AI for better matching
     const payload = { resume_text: resumeText || "", query: search || "entry-level roles" };
     const ai = await callAI("find_jobs", payload);
     if (!ai) {
@@ -148,12 +149,10 @@ export default function CareerAIPreview() {
     }
     if (ai.error) {
       console.warn("AI error fetching jobs:", ai.error);
-      // fallback jobs
       setJobs(getFallbackJobs());
       return;
     }
     if (ai.result) {
-      // try parse JSON
       try {
         const parsed = JSON.parse(ai.result);
         if (Array.isArray(parsed)) {
@@ -164,17 +163,14 @@ export default function CareerAIPreview() {
           setJobs(parsed.jobs.map(normalizeJob));
           return;
         }
-        // if object contains top-level job-like fields, wrap
         if (parsed.title) {
           setJobs([normalizeJob(parsed)]);
           return;
         }
-        // otherwise fallback to simple parsing
         const lines = String(ai.result).split("\n").filter(Boolean).slice(0, 10);
         setJobs(lines.map((l, i) => ({ id: i + 1, title: l, company: "", ats: randomAts(), stage: "Sourced", date: "" })));
         return;
-      } catch (e) {
-        // not JSON — parse lines
+      } catch {
         const lines = String(ai.result).split("\n").filter(Boolean).slice(0, 10);
         setJobs(lines.map((l, i) => ({ id: i + 1, title: l, company: "", ats: randomAts(), stage: "Sourced", date: "" })));
         return;
@@ -207,7 +203,7 @@ export default function CareerAIPreview() {
     return Math.floor(Math.random() * 25) + 70;
   }
 
-  // ---------- RESUME ----------
+  // ---------- RESUME (optimize) ----------
   async function handleOptimizeResume() {
     if (!resumeText) {
       showAlert("Please upload or paste your resume text first.");
@@ -228,11 +224,9 @@ export default function CareerAIPreview() {
         setOptimizedResume(parsed.optimized || parsed.optimized_text || ai.result);
         setAtsScore(parsed.score || parsed.ats || null);
       } catch {
-        // plain text returned — show as-is
         setOptimizedResume(ai.result);
         setAtsScore(null);
       }
-      // refresh jobs after optimization (resume improved)
       fetchJobs();
     } else {
       showAlert("AI did not return optimized resume.");
@@ -251,11 +245,87 @@ export default function CareerAIPreview() {
     }
     if (ai?.result) {
       setCoverLetter(ai.result);
-      // open resume tab so user sees generated letter
       setTab("resume");
     } else {
       showAlert("Cover letter generation failed.");
     }
+  }
+
+  // ---------- CREATE RESUME (new) ----------
+  async function handleCreateResume() {
+    // Build profile object
+    const profile = {
+      name: crName,
+      title: crTitle,
+      summary: crSummary,
+      education: crEducation,
+      experience: crExperience,
+      skills: crSkills,
+    };
+
+    // validation
+    if (!crName || !crSkills) {
+      showAlert("Please provide at least your name and skills (skills help AI generate a relevant resume).");
+      return;
+    }
+
+    const ai = await callAI("create_resume", { profile });
+    if (ai?.error) {
+      showAlert("Resume generation failed: " + ai.error);
+      return;
+    }
+    if (ai?.result) {
+      // AI should return a plaintext resume. We'll set optimizedResume to that
+      setOptimizedResume(ai.result);
+      setAtsScore(null);
+      // switch to resume view so user can see/download
+      setTab("resume");
+    } else {
+      showAlert("No resume returned from AI.");
+    }
+  }
+
+  function downloadTextFile(filename, content) {
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function openPrintableResume(content) {
+    const html = `
+      <html>
+        <head>
+          <title>Resume</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            body { font-family: Arial, sans-serif; padding: 28px; color:#111; }
+            pre { white-space: pre-wrap; font-family: Arial, sans-serif; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <pre>${escapeHtml(content)}</pre>
+          <script>setTimeout(()=>window.print(), 300);</script>
+        </body>
+      </html>
+    `;
+    const w = window.open("", "_blank");
+    if (!w) {
+      showAlert("Popup blocked. Allow popups to print/save as PDF.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
   }
 
   // ---------- AUTOPILOT ----------
@@ -266,7 +336,6 @@ export default function CareerAIPreview() {
       return;
     }
 
-    // if no jobs currently, try fetching
     if (!jobs || jobs.length === 0) {
       await fetchJobs();
     }
@@ -275,7 +344,7 @@ export default function CareerAIPreview() {
       return;
     }
 
-    const toApply = jobs.slice(0, 10); // limit
+    const toApply = jobs.slice(0, 10);
     for (const job of toApply) {
       const gen = await callAI("generate_cover_letter", { job, resume_text: resumeText });
       const letter = gen?.result || "Auto-generated cover letter";
@@ -291,7 +360,6 @@ export default function CareerAIPreview() {
       }
     }
     alert("Autopilot finished — applications saved to your account.");
-    // refresh dashboard jobs / state
     fetchJobs();
   }
 
@@ -380,7 +448,6 @@ export default function CareerAIPreview() {
     const reader = new FileReader();
     reader.onload = (ev) => setResumeText(String(ev.target.result || ""));
     reader.onerror = () => showAlert("Failed to read file. Try pasting text instead.");
-    // reading as text; PDFs may not extract cleanly on client
     reader.readAsText(file);
   }
 
@@ -411,22 +478,16 @@ export default function CareerAIPreview() {
     );
   }
 
-  // When user clicks a feature card: switch to its tab and trigger a sample action
   async function onFeatureClick(feature) {
     if (!feature) return;
     setTab(feature.tab || "overview");
-    // Trigger a helpful action depending on the feature:
     if (feature.key === "navigator") {
-      // open overview & refresh jobs
       await fetchJobs();
     } else if (feature.key === "skillfix") {
-      // pre-generate a sample lesson
       await handleGenerateLesson("Communication for interviews");
     } else if (feature.key === "resume") {
-      // jump to resume area
-      // no extra action; user can upload and optimize
+      // open resume tab; no extra
     } else if (feature.key === "autopilot") {
-      // prompt user to sign in or start autopilot flow
       if (!user) {
         if (confirm("Sign in to use Apply Autopilot?")) loginWithGoogle();
       } else {
@@ -439,11 +500,9 @@ export default function CareerAIPreview() {
     }
   }
 
-  // CTA helpers
   function onStartFree() {
     setTab("overview");
     fetchJobs();
-    // smooth scroll to dashboard area (if needed)
     window.scrollTo({ top: 300, behavior: "smooth" });
   }
   function onSeeDemo() {
@@ -678,10 +737,11 @@ export default function CareerAIPreview() {
                 <div>
                   <div className="flex items-center justify-between">
                     <h4 className="font-semibold">Resume + ATS Booster</h4>
-                    <div className="text-sm text-slate-400">Upload → Optimize → Score</div>
+                    <div className="text-sm text-slate-400">Upload → Optimize → Score • Or create a resume from profile</div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Upload / Paste */}
                     <div className="p-4 bg-slate-50 rounded-lg">
                       <p className="text-xs text-slate-400">Uploaded Resume</p>
                       <div className="mt-2 p-3 bg-white rounded-md border">
@@ -696,6 +756,8 @@ export default function CareerAIPreview() {
                         )}
                       </div>
                     </div>
+
+                    {/* ATS score + Optimize + Create Resume Form */}
                     <div className="p-4 bg-slate-50 rounded-lg">
                       <p className="text-xs text-slate-400">Current ATS Score</p>
                       <p className="font-bold text-3xl mt-2">{atsScore || "—"}</p>
@@ -708,12 +770,38 @@ export default function CareerAIPreview() {
                     </div>
                   </div>
 
-                  {optimizedResume && (
-                    <div className="mt-4 p-4 bg-white border rounded-md">
-                      <h5 className="font-semibold">Optimized Resume</h5>
-                      <pre className="text-xs mt-2 max-h-56 overflow-auto">{typeof optimizedResume === "string" ? optimizedResume : JSON.stringify(optimizedResume, null, 2)}</pre>
+                  {/* Create Resume from Profile */}
+                  <div className="mt-6 bg-white border rounded-md p-4">
+                    <h5 className="font-semibold">Create Resume from Profile</h5>
+                    <p className="text-sm text-slate-500">If you don't have a resume, fill this quick form and let AI generate a professional resume for you.</p>
+
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <input value={crName} onChange={(e) => setCrName(e.target.value)} placeholder="Full name" className="p-2 border rounded-md" />
+                      <input value={crTitle} onChange={(e) => setCrTitle(e.target.value)} placeholder="Desired title (e.g., Junior Data Analyst)" className="p-2 border rounded-md" />
+                      <textarea value={crSummary} onChange={(e) => setCrSummary(e.target.value)} placeholder="Short summary (optional)" className="p-2 border rounded-md md:col-span-2" />
+                      <textarea value={crEducation} onChange={(e) => setCrEducation(e.target.value)} placeholder="Education (degree, college, year)" className="p-2 border rounded-md" />
+                      <textarea value={crExperience} onChange={(e) => setCrExperience(e.target.value)} placeholder="Experience / projects (comma or newline separated)" className="p-2 border rounded-md" />
+                      <input value={crSkills} onChange={(e) => setCrSkills(e.target.value)} placeholder="Skills (comma separated: SQL, Python, Excel)" className="p-2 border rounded-md" />
                     </div>
-                  )}
+
+                    <div className="mt-3 flex gap-2">
+                      <button onClick={handleCreateResume} className="px-4 py-2 bg-indigo-600 text-white rounded-md">{aiLoading ? "Generating..." : "Generate Resume"}</button>
+                      <button onClick={() => { setCrName(""); setCrTitle(""); setCrSummary(""); setCrEducation(""); setCrExperience(""); setCrSkills(""); }} className="px-4 py-2 border rounded-md">Reset</button>
+                    </div>
+
+                    {optimizedResume && (
+                      <div className="mt-4 p-3 bg-slate-50 rounded-md">
+                        <div className="flex items-center justify-between">
+                          <h6 className="font-semibold">Generated Resume</h6>
+                          <div className="flex gap-2">
+                            <button onClick={() => downloadTextFile("resume.txt", optimizedResume)} className="px-3 py-1 border rounded-md">Download (.txt)</button>
+                            <button onClick={() => openPrintableResume(optimizedResume)} className="px-3 py-1 bg-indigo-600 text-white rounded-md">Open Printable</button>
+                          </div>
+                        </div>
+                        <pre className="text-xs mt-2 max-h-56 overflow-auto">{optimizedResume}</pre>
+                      </div>
+                    )}
+                  </div>
 
                   {coverLetter && (
                     <div className="mt-4 p-4 bg-white border rounded-md">
@@ -950,3 +1038,4 @@ export default function CareerAIPreview() {
     </div>
   );
 }
+
