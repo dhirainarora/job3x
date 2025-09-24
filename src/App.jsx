@@ -15,10 +15,16 @@ import { auth, db, loginWithGoogle, logoutUser } from "./firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 /**
- * Full CareerAI App.jsx — Preview UI kept exactly, with real functionality.
- * - Uses '/.netlify/functions/ai' for AI features (actions: find_jobs, optimize_resume, generate_cover_letter, generate_lesson, mock_interview, interview_feedback, side_hustles)
- * - Uses Firebase auth & Firestore to save applications (user must sign in)
- * - No API keys here (Netlify env provides them)
+ * src/App.jsx
+ * - Visual design preserved exactly like your preview
+ * - All feature cards and buttons wired to AI + Firebase flows
+ * - Calls serverless function at /.netlify/functions/ai with actions:
+ *   find_jobs, optimize_resume, generate_cover_letter, generate_lesson,
+ *   mock_interview, interview_feedback, side_hustles
+ *
+ * Important:
+ * - Do NOT put API keys here. Netlify envs must provide GEMINI_API_KEY and VITE_FIREBASE_*.
+ * - If AI returns raw text, component tries to parse JSON; otherwise uses fallback parsing.
  */
 
 export default function CareerAIPreview() {
@@ -28,79 +34,90 @@ export default function CareerAIPreview() {
   const [user, setUser] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Jobs (dynamic, from AI)
+  // Jobs (dynamic: AI -> jobs)
   const [jobs, setJobs] = useState([]);
 
-  // Resume / AI states
+  // Resume & ATS
   const [resumeText, setResumeText] = useState("");
   const [optimizedResume, setOptimizedResume] = useState(null);
   const [atsScore, setAtsScore] = useState(null);
   const [coverLetter, setCoverLetter] = useState("");
 
-  // Skill / lesson states
+  // Lessons & Interview
   const [lesson, setLesson] = useState(null);
-
-  // Interview states
+  const [gigs, setGigs] = useState([]);
   const [interviewQuestions, setInterviewQuestions] = useState([]);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [userAnswer, setUserAnswer] = useState("");
   const [interviewFeedback, setInterviewFeedback] = useState(null);
 
-  // Side hustles
-  const [gigs, setGigs] = useState([]);
-
-  // Basic feature list (UI only - descriptions remain static)
+  // Feature list for UI (kept visually same)
   const features = [
     {
+      key: "navigator",
       title: "Career Path Navigator",
       desc: "Discover job paths from your degree + real market demand.",
       icon: Rocket,
+      tab: "overview",
     },
     {
+      key: "skillfix",
       title: "AI Skill Fixer",
       desc: "Micro-lessons that fill your exact skill gaps — learn in 10–30 min blocks.",
       icon: Zap,
+      tab: "skills",
     },
     {
+      key: "resume",
       title: "Resume + ATS Booster",
       desc: "Auto-tailor resumes for each job and hit 90+ ATS scores.",
       icon: FileText,
+      tab: "resume",
     },
     {
+      key: "autopilot",
       title: "Job Apply Autopilot",
       desc: "Set preferences and let AI apply to hundreds of matching roles.",
       icon: GitBranch,
+      tab: "overview",
     },
     {
+      key: "interview",
       title: "Interview Coach (Voice & Video)",
       desc: "Realistic mock interviews with instant feedback and improvement tips.",
       icon: UserCheck,
+      tab: "interview",
     },
     {
+      key: "hustles",
       title: "Side-Hustle Finder",
       desc: "Freelance gigs to start earning while you land your full-time role.",
       icon: Briefcase,
+      tab: "hustles",
     },
   ];
 
-  // Firebase auth observer
+  // Monitor Firebase auth state
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => setUser(u));
     return () => unsub();
   }, []);
 
-  // Fetch jobs from AI when page loads and when overview is opened
+  // Fetch starter jobs on mount
   useEffect(() => {
-    fetchJobs();
+    fetchJobs(); // initial load (AI or fallback)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // If user switches to overview, refresh jobs
   useEffect(() => {
-    if (tab === "overview") fetchJobs();
+    if (tab === "overview") {
+      fetchJobs();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // Central AI call to serverless function
+  // Centralized AI call to serverless endpoint
   async function callAI(action, payload = {}) {
     setAiLoading(true);
     try {
@@ -112,73 +129,154 @@ export default function CareerAIPreview() {
       const json = await res.json();
       setAiLoading(false);
       return json;
-    } catch (e) {
+    } catch (err) {
       setAiLoading(false);
-      return { error: e.message || String(e) };
+      console.error("callAI error", err);
+      return { error: err.message || String(err) };
     }
   }
 
-  // Fetch jobs via AI (action: find_jobs)
+  // ---------- JOBS ----------
   async function fetchJobs() {
-    // If resume exists, send it so AI can match better
-    const payload = { resume_text: resumeText || "", query: search || "recent entry-level roles" };
+    // Send resume (if available) and search query to AI for better matching
+    const payload = { resume_text: resumeText || "", query: search || "entry-level roles" };
     const ai = await callAI("find_jobs", payload);
-    if (!ai) return;
+    if (!ai) {
+      showAlert("AI returned no response while fetching jobs.");
+      setJobs(getFallbackJobs());
+      return;
+    }
     if (ai.error) {
-      console.error("AI error fetching jobs:", ai.error);
+      console.warn("AI error fetching jobs:", ai.error);
+      // fallback jobs
+      setJobs(getFallbackJobs());
       return;
     }
     if (ai.result) {
-      // AI result may be JSON or raw text; try parse to standard shape: [{title, company, ats, stage, date}]
+      // try parse JSON
       try {
         const parsed = JSON.parse(ai.result);
-        // Accept common shapes:
         if (Array.isArray(parsed)) {
-          setJobs(parsed);
-        } else if (parsed.jobs && Array.isArray(parsed.jobs)) {
-          setJobs(parsed.jobs);
-        } else {
-          // fallback: wrap string
-          setJobs([{ id: 1, title: String(ai.result).slice(0, 100), company: "", ats: 0, stage: "", date: "" }]);
+          setJobs(parsed.map(normalizeJob));
+          return;
         }
-      } catch {
-        // Try to parse newline items
+        if (parsed.jobs && Array.isArray(parsed.jobs)) {
+          setJobs(parsed.jobs.map(normalizeJob));
+          return;
+        }
+        // if object contains top-level job-like fields, wrap
+        if (parsed.title) {
+          setJobs([normalizeJob(parsed)]);
+          return;
+        }
+        // otherwise fallback to simple parsing
         const lines = String(ai.result).split("\n").filter(Boolean).slice(0, 10);
-        const mapped = lines.map((l, i) => ({ id: i + 1, title: l, company: "", ats: Math.floor(Math.random() * 30) + 60, stage: "Sourced", date: "" }));
-        setJobs(mapped);
+        setJobs(lines.map((l, i) => ({ id: i + 1, title: l, company: "", ats: randomAts(), stage: "Sourced", date: "" })));
+        return;
+      } catch (e) {
+        // not JSON — parse lines
+        const lines = String(ai.result).split("\n").filter(Boolean).slice(0, 10);
+        setJobs(lines.map((l, i) => ({ id: i + 1, title: l, company: "", ats: randomAts(), stage: "Sourced", date: "" })));
+        return;
       }
+    } else {
+      setJobs(getFallbackJobs());
     }
   }
 
-  // Resume & ATS handlers
+  function normalizeJob(j) {
+    return {
+      id: j.id || j.jobId || Math.random().toString(36).slice(2, 9),
+      title: j.title || j.jobTitle || j.position || "Role",
+      company: j.company || j.employer || j.organization || "",
+      ats: j.ats !== undefined ? j.ats : j.score !== undefined ? j.score : randomAts(),
+      stage: j.stage || j.status || "Sourced",
+      date: j.date || j.posted || "",
+    };
+  }
+
+  function getFallbackJobs() {
+    return [
+      { id: "f1", title: "Data-entry • Remote", company: "Remote Gigs", ats: 75, stage: "Sourced", date: "" },
+      { id: "f2", title: "Website QA • Remote", company: "QA Hub", ats: 78, stage: "Sourced", date: "" },
+      { id: "f3", title: "Junior Data Analyst", company: "Insight Labs", ats: 80, stage: "Sourced", date: "" },
+    ];
+  }
+
+  function randomAts() {
+    return Math.floor(Math.random() * 25) + 70;
+  }
+
+  // ---------- RESUME ----------
   async function handleOptimizeResume() {
-    if (!resumeText) return alert("Upload or paste your resume first");
+    if (!resumeText) {
+      showAlert("Please upload or paste your resume text first.");
+      return;
+    }
     const ai = await callAI("optimize_resume", { resume_text: resumeText });
-    if (ai?.result) {
+    if (!ai) {
+      showAlert("AI returned no response for resume optimization.");
+      return;
+    }
+    if (ai.error) {
+      showAlert("AI error: " + ai.error);
+      return;
+    }
+    if (ai.result) {
       try {
         const parsed = JSON.parse(ai.result);
         setOptimizedResume(parsed.optimized || parsed.optimized_text || ai.result);
         setAtsScore(parsed.score || parsed.ats || null);
       } catch {
+        // plain text returned — show as-is
         setOptimizedResume(ai.result);
+        setAtsScore(null);
       }
+      // refresh jobs after optimization (resume improved)
+      fetchJobs();
     } else {
-      alert("AI error: " + (ai?.error || "unknown"));
+      showAlert("AI did not return optimized resume.");
     }
   }
 
   async function handleGenerateCoverLetter(job) {
-    if (!resumeText) return alert("Add resume text first (upload/paste)");
+    if (!resumeText) {
+      showAlert("Please add your resume text first so we can tailor the cover letter.");
+      return;
+    }
     const ai = await callAI("generate_cover_letter", { job, resume_text: resumeText });
-    if (ai?.result) setCoverLetter(ai.result);
-    else alert("Error generating cover letter");
+    if (ai?.error) {
+      showAlert("Error generating cover letter: " + ai.error);
+      return;
+    }
+    if (ai?.result) {
+      setCoverLetter(ai.result);
+      // open resume tab so user sees generated letter
+      setTab("resume");
+    } else {
+      showAlert("Cover letter generation failed.");
+    }
   }
 
-  // Autopilot applies and saves to Firestore if user logged in
+  // ---------- AUTOPILOT ----------
   async function handleApplyAutopilot() {
-    if (!user) return alert("Please sign in to use Apply Autopilot (we save your applications)");
-    if (!jobs || jobs.length === 0) return alert("No jobs to apply to yet — try 'Find Hustles' or open Overview");
-    for (const job of jobs) {
+    if (!user) {
+      const ok = confirm("You need to sign in to save applications. Sign in now?");
+      if (ok) loginWithGoogle();
+      return;
+    }
+
+    // if no jobs currently, try fetching
+    if (!jobs || jobs.length === 0) {
+      await fetchJobs();
+    }
+    if (!jobs || jobs.length === 0) {
+      showAlert("No jobs to apply to yet — try 'Find Hustles' or open Overview");
+      return;
+    }
+
+    const toApply = jobs.slice(0, 10); // limit
+    for (const job of toApply) {
       const gen = await callAI("generate_cover_letter", { job, resume_text: resumeText });
       const letter = gen?.result || "Auto-generated cover letter";
       try {
@@ -188,23 +286,37 @@ export default function CareerAIPreview() {
           coverLetter: letter,
           createdAt: serverTimestamp(),
         });
-      } catch (e) {
-        console.error("Firestore save failed", e);
+      } catch (err) {
+        console.error("Firestore save failed", err);
       }
     }
-    alert("Autopilot finished — applications saved to your account (if signed in).");
+    alert("Autopilot finished — applications saved to your account.");
+    // refresh dashboard jobs / state
+    fetchJobs();
   }
 
-  // Skill lesson
+  // ---------- LESSON ----------
   async function handleGenerateLesson(skill) {
     const ai = await callAI("generate_lesson", { skill });
-    if (ai?.result) setLesson(ai.result);
-    else alert("Lesson generation failed");
+    if (ai?.error) {
+      showAlert("Failed to generate lesson: " + ai.error);
+      return;
+    }
+    if (ai?.result) {
+      setLesson(ai.result);
+      setTab("skills");
+    } else {
+      showAlert("Lesson generation returned nothing.");
+    }
   }
 
-  // Interview coach
+  // ---------- INTERVIEW ----------
   async function handleStartMockInterview(role = "Full-stack recruiter simulation") {
     const ai = await callAI("mock_interview", { role });
+    if (ai?.error) {
+      showAlert("Failed to start mock interview: " + ai.error);
+      return;
+    }
     if (ai?.result) {
       try {
         const parsed = JSON.parse(ai.result);
@@ -213,22 +325,40 @@ export default function CareerAIPreview() {
         setInterviewQuestions(String(ai.result).split("\n").filter(Boolean));
       }
       setCurrentQuestionIdx(0);
+      setTab("interview");
     } else {
-      alert("Failed to start mock interview");
+      showAlert("Mock interview returned no questions.");
     }
   }
 
   async function handleSubmitInterviewAnswer() {
     const question = interviewQuestions[currentQuestionIdx];
+    if (!question) {
+      showAlert("No question available.");
+      return;
+    }
     const ai = await callAI("interview_feedback", { question, answer: userAnswer });
-    if (ai?.result) setInterviewFeedback(ai.result);
-    setUserAnswer("");
-    setCurrentQuestionIdx((i) => Math.min(i + 1, interviewQuestions.length - 1));
+    if (ai?.error) {
+      showAlert("Feedback error: " + ai.error);
+      return;
+    }
+    if (ai?.result) {
+      setInterviewFeedback(ai.result);
+      setUserAnswer("");
+      setCurrentQuestionIdx((i) => Math.min(i + 1, interviewQuestions.length - 1));
+    } else {
+      showAlert("Feedback generation failed.");
+    }
   }
 
-  // Side hustles
+  // ---------- SIDE HUSTLES ----------
   async function handleFindSideHustles() {
     const ai = await callAI("side_hustles", { profile: user?.email || "student" });
+    if (ai?.error) {
+      showAlert("Failed to find hustles: " + ai.error);
+      setGigs([]);
+      return;
+    }
     if (ai?.result) {
       try {
         const parsed = JSON.parse(ai.result);
@@ -236,30 +366,39 @@ export default function CareerAIPreview() {
       } catch {
         setGigs(String(ai.result).split("\n").filter(Boolean));
       }
+      setTab("hustles");
     } else {
-      alert("Failed to find hustles");
+      setGigs([]);
+      showAlert("No hustles returned.");
     }
   }
 
-  // File upload helper (reads text content)
+  // ---------- HELPERS ----------
   function handleResumeFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => setResumeText(String(ev.target.result || ""));
-    // Note: reading PDFs as text is not ideal; for accurate parsing you'd extract text server-side.
+    reader.onerror = () => showAlert("Failed to read file. Try pasting text instead.");
+    // reading as text; PDFs may not extract cleanly on client
     reader.readAsText(file);
   }
 
-  // Helper to show top N jobs in hero/dashboard cards (handles no jobs case)
+  function showAlert(msg) {
+    try {
+      alert(msg);
+    } catch (e) {
+      console.error("Alert failed:", e);
+    }
+  }
+
   function renderJobCard(j, idx) {
-    const title = j.title || j.jobTitle || j.position || `Role ${idx + 1}`;
-    const company = j.company || j.employer || "";
-    const date = j.date || j.posted || "";
-    const ats = j.ats !== undefined ? j.ats : j.score || Math.floor(Math.random() * 30) + 60;
-    const stage = j.stage || "Sourced";
+    const title = j.title || `Role ${idx + 1}`;
+    const company = j.company || "";
+    const date = j.date || "";
+    const ats = j.ats !== undefined ? j.ats : j.score !== undefined ? j.score : randomAts();
     return (
-      <div key={idx} className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
+      <div key={j.id ?? idx} className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
         <div>
           <p className="font-medium">{title}</p>
           <p className="text-xs text-slate-400">{company} {date ? `• ${date}` : ""}</p>
@@ -272,6 +411,47 @@ export default function CareerAIPreview() {
     );
   }
 
+  // When user clicks a feature card: switch to its tab and trigger a sample action
+  async function onFeatureClick(feature) {
+    if (!feature) return;
+    setTab(feature.tab || "overview");
+    // Trigger a helpful action depending on the feature:
+    if (feature.key === "navigator") {
+      // open overview & refresh jobs
+      await fetchJobs();
+    } else if (feature.key === "skillfix") {
+      // pre-generate a sample lesson
+      await handleGenerateLesson("Communication for interviews");
+    } else if (feature.key === "resume") {
+      // jump to resume area
+      // no extra action; user can upload and optimize
+    } else if (feature.key === "autopilot") {
+      // prompt user to sign in or start autopilot flow
+      if (!user) {
+        if (confirm("Sign in to use Apply Autopilot?")) loginWithGoogle();
+      } else {
+        handleApplyAutopilot();
+      }
+    } else if (feature.key === "interview") {
+      handleStartMockInterview();
+    } else if (feature.key === "hustles") {
+      handleFindSideHustles();
+    }
+  }
+
+  // CTA helpers
+  function onStartFree() {
+    setTab("overview");
+    fetchJobs();
+    // smooth scroll to dashboard area (if needed)
+    window.scrollTo({ top: 300, behavior: "smooth" });
+  }
+  function onSeeDemo() {
+    setTab("skills");
+    handleGenerateLesson("SQL Fundamentals");
+  }
+
+  // ---------- RENDER ----------
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
       {/* NAV */}
@@ -286,10 +466,11 @@ export default function CareerAIPreview() {
           </div>
         </div>
         <nav className="flex items-center gap-4">
-          <button className="text-sm px-3 py-2 rounded-md hover:bg-slate-100">Features</button>
-          <button className="text-sm px-3 py-2 rounded-md hover:bg-slate-100">Pricing</button>
+          <button onClick={() => window.scrollTo({ top: 600, behavior: "smooth" })} className="text-sm px-3 py-2 rounded-md hover:bg-slate-100">Features</button>
+          <button onClick={() => window.scrollTo({ top: 1400, behavior: "smooth" })} className="text-sm px-3 py-2 rounded-md hover:bg-slate-100">Pricing</button>
           {user ? (
             <div className="flex items-center gap-3">
+              <img src={user.photoURL} alt="avatar" className="w-8 h-8 rounded-full" />
               <div className="text-sm">{user.displayName || user.email}</div>
               <button onClick={() => logoutUser()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow hover:brightness-95">Sign out</button>
             </div>
@@ -302,12 +483,7 @@ export default function CareerAIPreview() {
       {/* HERO */}
       <section className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
         <div>
-          <motion.h2
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.05 }}
-            className="text-4xl md:text-5xl font-bold leading-tight"
-          >
+          <motion.h2 initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 }} className="text-4xl md:text-5xl font-bold leading-tight">
             Stuck after college or can’t land a job? <span className="text-indigo-600">CareerAI</span> gets you hired — fast.
           </motion.h2>
           <motion.p className="mt-4 text-slate-600 max-w-xl" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.12 }}>
@@ -315,8 +491,8 @@ export default function CareerAIPreview() {
           </motion.p>
 
           <div className="mt-6 flex gap-3">
-            <button onClick={() => setTab("overview")} className="px-6 py-3 rounded-md bg-indigo-600 text-white font-medium shadow hover:scale-[1.01]">Start Free</button>
-            <button className="px-6 py-3 rounded-md border border-slate-200 text-slate-700">See Demo</button>
+            <button onClick={onStartFree} className="px-6 py-3 rounded-md bg-indigo-600 text-white font-medium shadow hover:scale-[1.01]">Start Free</button>
+            <button onClick={onSeeDemo} className="px-6 py-3 rounded-md border border-slate-200 text-slate-700">See Demo</button>
           </div>
 
           <div className="mt-8 bg-slate-50 border border-slate-100 p-4 rounded-lg">
@@ -332,7 +508,7 @@ export default function CareerAIPreview() {
           </div>
         </div>
 
-        {/* Hero Right: Quick Dashboard Mock (now dynamic) */}
+        {/* Hero Right: Quick Dashboard Mock (dynamic) */}
         <motion.div initial={{ scale: 0.98, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.15 }} className="bg-white border border-slate-100 rounded-2xl p-5 shadow-lg">
           <div className="flex items-start justify-between">
             <div>
@@ -346,34 +522,31 @@ export default function CareerAIPreview() {
           </div>
 
           <div className="mt-4 space-y-3">
-            {jobs.length > 0 ? (
+            {jobs && jobs.length > 0 ? (
               jobs.slice(0, 3).map((j, idx) => renderJobCard(j, idx))
             ) : (
-              // fallback sample shown until AI returns jobs
-              <>
-                <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
-                  <div>
-                    <p className="font-medium">Discovering roles…</p>
-                    <p className="text-xs text-slate-400">Matching to your profile</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-slate-400">ATS</p>
-                    <p className="font-semibold text-amber-600">—</p>
-                  </div>
+              <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
+                <div>
+                  <p className="font-medium">Discovering roles…</p>
+                  <p className="text-xs text-slate-400">Matching to your profile</p>
                 </div>
-              </>
+                <div className="text-right">
+                  <p className="text-xs text-slate-400">ATS</p>
+                  <p className="font-semibold text-amber-600">—</p>
+                </div>
+              </div>
             )}
           </div>
 
           <div className="mt-4 flex gap-2">
-            <button className="flex-1 py-2 rounded-md bg-indigo-600 text-white" onClick={() => setTab("resume")}>Open Dashboard</button>
-            <button className="py-2 px-3 rounded-md border" onClick={() => { if (!user) return alert("Sign in to export"); alert("Export is not implemented yet"); }}>Export</button>
+            <button onClick={() => setTab("overview")} className="flex-1 py-2 rounded-md bg-indigo-600 text-white">Open Dashboard</button>
+            <button onClick={() => { if (!user) return alert("Sign in to export"); alert("Export is not implemented yet"); }} className="py-2 px-3 rounded-md border">Export</button>
           </div>
         </motion.div>
       </section>
 
       {/* FEATURES */}
-      <section className="max-w-7xl mx-auto px-6 py-8">
+      <section id="features" className="max-w-7xl mx-auto px-6 py-8">
         <h3 className="text-2xl font-bold">What CareerAI does differently</h3>
         <p className="text-slate-500 mt-2 max-w-2xl">An end-to-end AI job accelerator built for college grads and anyone struggling to find a role.</p>
 
@@ -381,7 +554,7 @@ export default function CareerAIPreview() {
           {features.map((f, idx) => {
             const Icon = f.icon;
             return (
-              <motion.div key={idx} whileHover={{ y: -6 }} className="bg-white border rounded-xl p-5 shadow-sm">
+              <motion.div key={f.key} whileHover={{ y: -6 }} onClick={() => onFeatureClick(f)} className="cursor-pointer select-none bg-white border rounded-xl p-5 shadow-sm">
                 <div className="flex items-center gap-4">
                   <div className="p-3 rounded-lg bg-indigo-50">
                     <Icon className="text-indigo-600" />
@@ -399,14 +572,14 @@ export default function CareerAIPreview() {
 
       {/* PROMINENT CTA */}
       <section className="max-w-7xl mx-auto px-6 py-8">
-        <div className="bg-indigo-700 rounded-2xl p-8 text-white flex flex-col md:flex-row items center justify-between gap-6">
+        <div className="bg-indigo-700 rounded-2xl p-8 text-white flex flex-col md:flex-row items-center justify-between gap-6">
           <div>
             <h3 className="text-2xl font-bold">Ready to stop applying aimlessly?</h3>
             <p className="text-slate-100 mt-2">Let AI apply, train and coach you — so you only interview where you’ll win.</p>
           </div>
           <div className="flex gap-3">
-            <button className="bg-white text-indigo-700 px-5 py-3 rounded-md font-semibold">Start Free</button>
-            <button className="border border-white px-5 py-3 rounded-md">Book Demo</button>
+            <button onClick={onStartFree} className="bg-white text-indigo-700 px-5 py-3 rounded-md font-semibold">Start Free</button>
+            <button onClick={() => alert("Book demo coming soon")} className="border border-white px-5 py-3 rounded-md">Book Demo</button>
           </div>
         </div>
       </section>
@@ -427,20 +600,20 @@ export default function CareerAIPreview() {
             </div>
 
             <nav className="mt-6 space-y-2">
-              <button onClick={() => setTab("overview")} className={`w-full text-left p-2 rounded-md ${tab === "overview" ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-2"><LayoutGrid className="text-indigo-600" /><span>Overview</span></div>
+              <button onClick={() => setTab("overview")} className={`w-full text-left p-2 rounded-md ${tab === "overview" ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2"><LayoutGrid className="text-indigo-600"/><span>Overview</span></div>
               </button>
-              <button onClick={() => setTab("resume")} className={`w-full text-left p-2 rounded-md ${tab === "resume" ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-2"><FileText className="text-indigo-600" /><span>Resume</span></div>
+              <button onClick={() => setTab("resume")} className={`w-full text-left p-2 rounded-md ${tab === "resume" ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2"><FileText className="text-indigo-600"/><span>Resume</span></div>
               </button>
-              <button onClick={() => setTab("skills")} className={`w-full text-left p-2 rounded-md ${tab === "skills" ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-2"><Database className="text-indigo-600" /><span>Skills</span></div>
+              <button onClick={() => setTab("skills")} className={`w-full text-left p-2 rounded-md ${tab === "skills" ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2"><Database className="text-indigo-600"/><span>Skills</span></div>
               </button>
-              <button onClick={() => setTab("interview")} className={`w-full text-left p-2 rounded-md ${tab === "interview" ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-2"><UserCheck className="text-indigo-600" /><span>Interview</span></div>
+              <button onClick={() => setTab("interview")} className={`w-full text-left p-2 rounded-md ${tab === "interview" ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2"><UserCheck className="text-indigo-600"/><span>Interview</span></div>
               </button>
-              <button onClick={() => setTab("hustles")} className={`w-full text-left p-2 rounded-md ${tab === "hustles" ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-2"><Briefcase className="text-indigo-600" /><span>Side Hustles</span></div>
+              <button onClick={() => setTab("hustles")} className={`w-full text-left p-2 rounded-md ${tab === "hustles" ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}>
+                <div className="flex items-center gap-2"><Briefcase className="text-indigo-600"/><span>Side Hustles</span></div>
               </button>
             </nav>
 
@@ -485,10 +658,10 @@ export default function CareerAIPreview() {
                     <h5 className="font-semibold">Recent Applications</h5>
                     <div className="mt-3 space-y-3">
                       {jobs.length > 0 ? jobs.slice(0, 6).map((j, i) => (
-                        <div key={i} className="p-3 rounded-lg flex items-center justify-between bg-slate-50">
+                        <div key={j.id ?? i} className="p-3 rounded-lg flex items-center justify-between bg-slate-50">
                           <div>
-                            <p className="font-medium">{j.title || j.jobTitle}</p>
-                            <p className="text-xs text-slate-400">{j.company || j.employer}</p>
+                            <p className="font-medium">{j.title}</p>
+                            <p className="text-xs text-slate-400">{j.company}</p>
                           </div>
                           <div className="text-right">
                             <p className="text-xs text-slate-400">{j.stage || "Sourced"}</p>
