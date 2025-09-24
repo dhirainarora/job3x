@@ -1,95 +1,91 @@
 // netlify/functions/ai.js
-// Node 18+ syntax supported by Netlify. This example uses Google Generative API style.
-// If you're using the real Google SDK, adapt to the SDK shape you used previously.
-// This example uses a simple fetch to the hypothetical endpoint for clarity.
-
-const fetch = require("node-fetch");
+// Uses global fetch (Node 18+ / Netlify environment) — no node-fetch required.
+// Adjust the generative API call to match your working provider's endpoint/shape.
 
 exports.handler = async function (event) {
   try {
-    const { action, payload } = JSON.parse(event.body || "{}");
+    const body = event.body ? JSON.parse(event.body) : {};
+    const { action, payload } = body;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "Missing GEMINI_API_KEY in environment variables" }),
-      };
+      return { statusCode: 500, body: JSON.stringify({ error: "Missing GEMINI_API_KEY" }) };
     }
 
-    // helper to call the generative API (adapt to your SDK)
-    async function callGenerative(prompt) {
-      // Example: If you have a wrapper library, use it. Here we use a generic fetch as placeholder.
-      // You must adapt endpoint + headers to whatever you used successfully earlier.
-      const res = await fetch("https://api.openai-compatible-or-google-gemini-endpoint.example/generate", {
+    // helper using global fetch
+    async function callGenerative(prompt, maxTokens = 1200) {
+      // === IMPORTANT ===
+      // Replace the URL + request shape below with the exact endpoint & body your provider expects.
+      // Example below is a generic POST that sends { prompt } and expects JSON { text: "..." }.
+      const endpoint = process.env.GENERATIVE_API_URL || "https://your-gemini-or-openai-endpoint.example/v1/generate";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ prompt, max_tokens: 1200 }),
+        body: JSON.stringify({ prompt, max_tokens: maxTokens }),
       });
+
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(`AI request failed: ${res.status} ${txt}`);
       }
       const data = await res.json();
-      // adjust for your provider's shape
-      return (data.result && (data.result.content || data.result.text)) || JSON.stringify(data);
+      // Try to return common shapes; adapt to your provider if different
+      if (data.result) return typeof data.result === "string" ? data.result : JSON.stringify(data.result);
+      if (data.text) return data.text;
+      if (data.output?.text) return data.output.text;
+      return JSON.stringify(data);
     }
 
     let prompt = "";
     if (action === "find_jobs") {
-      prompt = `You are an expert job-sourcing assistant. Given resume text and a query, return a JSON array of up to 10 entry-level job suggestions. 
-Resume: ${payload.resume_text || ""} 
-Query: ${payload.query || ""} 
-Return JSON array like [{title, company, ats, stage, date}, ...].`;
+      prompt = `You are a job-sourcing assistant. Resume: ${payload.resume_text || ""}\nQuery: ${payload.query || ""}\nReturn a JSON array of jobs with fields: title, company, ats (number), stage, date.`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "optimize_resume") {
-      prompt = `You are an ATS resume expert. Optimize the following resume text for entry-level job applications. Provide output as JSON: { "optimized": "...", "score": 0-100 }. Resume:\n${payload.resume_text || ""}`;
+      prompt = `You are an ATS resume expert. Optimize the following resume text. Return JSON: { "optimized": "...", "score": 0-100 }.\n\nResume:\n${payload.resume_text || ""}`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "generate_cover_letter") {
-      prompt = `Write a concise professional cover letter for this job and this resume. Job: ${JSON.stringify(payload.job || {})}\nResume: ${payload.resume_text || ""}\nReturn plain text.`;
+      prompt = `Write a concise professional cover letter for this job:\n${JSON.stringify(payload.job || {})}\nResume:\n${payload.resume_text || ""}\nReturn plain text.`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "generate_lesson") {
-      prompt = `Generate a 10-20 minute micro-lesson (outline + steps + short practice) to improve skill: ${payload.skill}`;
+      prompt = `Generate a 10-20 minute micro-lesson for skill: ${payload.skill}`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "mock_interview") {
-      prompt = `Act as an interviewer for the role: ${payload.role}. Generate 5 realistic interview questions in JSON: { "questions": [ ... ] }`;
+      prompt = `Act as an interviewer for role: ${payload.role}. Return JSON: { "questions": [ ... ] }`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "interview_feedback") {
-      prompt = `Question: ${payload.question}\nCandidate Answer: ${payload.answer}\nProvide constructive feedback and a 3-point improvement plan. Return plain text.`;
+      prompt = `Question: ${payload.question}\nCandidate Answer: ${payload.answer}\nGive feedback and 3 improvements.`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
     if (action === "side_hustles") {
-      prompt = `Suggest 5 freelance side hustles for a person with profile: ${payload.profile}. Return JSON array of {title, desc, pay}.`;
+      prompt = `Suggest 5 side hustles for profile: ${payload.profile}. Return JSON array of { title, desc, pay }.`;
       const result = await callGenerative(prompt);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
-    // NEW: create_resume from profile
     if (action === "create_resume") {
-      // payload.profile = { name, title, summary, education, experience, skills }
       const p = payload.profile || {};
-      prompt = `You are an expert resume writer. Create a professional, ATS-friendly resume (plain text) using this profile. Include: name, title, contact line (placeholder), summary/profile, skills (comma separated), education (formatted), experience (bullet points showing measurable impact). Output only the resume text. Use concise, achievement-focused language.\n\nProfile:\n${JSON.stringify(p, null, 2)}`;
-      const result = await callGenerative(prompt);
+      prompt = `You are an expert resume writer. Create an ATS-friendly resume (plain text) using profile: ${JSON.stringify(p)}. Output only resume text.`;
+      const result = await callGenerative(prompt, 1400);
       return { statusCode: 200, body: JSON.stringify({ result }) };
     }
 
@@ -99,3 +95,4 @@ Return JSON array like [{title, company, ats, stage, date}, ...].`;
     return { statusCode: 500, body: JSON.stringify({ error: "Server error", details: err.message }) };
   }
 };
+
