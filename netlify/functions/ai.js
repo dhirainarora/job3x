@@ -1,70 +1,49 @@
-// netlify/functions/ai.js
-const axios = require("axios");
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-exports.handler = async function (event) {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 200, body: JSON.stringify({ ok: true, message: "AI function alive" }) };
-  }
-
-  let body;
+export async function handler(event) {
   try {
-    body = JSON.parse(event.body);
-  } catch (e) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) };
-  }
+    const { action, payload } = JSON.parse(event.body || "{}");
 
-  const { action, payload } = body;
-  const GEMINI_KEY = process.env.GEMINI_API_KEY;
-
-  async function geminiChat(prompt) {
-    try {
-      const res = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_KEY}`,
-        {
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-        }
-      );
-      return res.data.candidates?.[0]?.content?.parts?.[0]?.text || JSON.stringify(res.data);
-    } catch (err) {
-      console.error("Gemini API error", err.response?.data || err.message);
-      throw err;
+    // ✅ Read Gemini key from Netlify env
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return { statusCode: 500, body: JSON.stringify({ error: "Missing GEMINI_API_KEY" }) };
     }
-  }
 
-  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
     let prompt = "";
+
     if (action === "optimize_resume") {
-      prompt = `Optimize this resume for ATS. Return JSON: { "optimized": "...", "score": 0-100 }. Resume:\n${payload.resume_text || ""}`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
+      prompt = `You are an ATS resume expert. Optimize the following resume text for better job applications. Give ATS score (0-100) and optimized resume as JSON with keys "optimized" and "score". Resume:\n${payload.resume_text}`;
+    } else if (action === "generate_cover_letter") {
+      prompt = `Write a professional cover letter for this job:\n${JSON.stringify(payload.job)}\nResume:\n${payload.resume_text}`;
+    } else if (action === "generate_lesson") {
+      prompt = `Generate a 10–20 min micro-lesson to improve skill: ${payload.skill}`;
+    } else if (action === "mock_interview") {
+      prompt = `Act as an interviewer for the role: ${payload.role}. Generate 5 realistic interview questions in JSON array.`;
+    } else if (action === "interview_feedback") {
+      prompt = `Question: ${payload.question}\nCandidate Answer: ${payload.answer}\nGive constructive feedback.`;
+    } else if (action === "side_hustles") {
+      prompt = `Suggest 5 freelance side hustles for a person with profile: ${payload.profile}. Return JSON array of {title, pay, type}.`;
+    } else {
+      return { statusCode: 400, body: JSON.stringify({ error: "Unknown action" }) };
     }
 
-    if (action === "generate_cover_letter") {
-      prompt = `Write a cover letter for this job: ${JSON.stringify(payload.job)} using resume:\n${payload.resume_text || ""}`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
-    }
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
 
-    if (action === "generate_lesson") {
-      prompt = `Make a micro-lesson for learning ${payload.skill}. Include steps and an exercise.`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
-    }
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ result: text }),
+    };
 
-    if (action === "mock_interview") {
-      prompt = `Generate 8 interview questions for ${payload.role || "software engineer"}. Return JSON: { "questions": [ ... ] }`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
-    }
-
-    if (action === "interview_feedback") {
-      prompt = `Give feedback on this answer. Q: ${payload.question} A: ${payload.answer}. Return 3 improvement tips.`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
-    }
-
-    if (action === "side_hustles") {
-      prompt = `Suggest 6 online side hustles for ${payload.profile}. Return JSON: { "gigs": [ { "title": "...", "desc": "..." } ] }`;
-      return { statusCode: 200, body: JSON.stringify({ result: await geminiChat(prompt) }) };
-    }
-
-    return { statusCode: 400, body: JSON.stringify({ error: "Unknown action" }) };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: "AI call failed", detail: err.message || String(err) }) };
+    console.error("AI call failed", err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "AI call failed", details: err.message }),
+    };
   }
-};
+}
